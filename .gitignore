@@ -1,5 +1,6 @@
 # Large datasets (too big for GitHub)
-datasets/
+datasets/*.csv
+datasets/*.zip
 
 # Python
 __pycache__/
