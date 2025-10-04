@@ -24,8 +24,11 @@ from sklearn.decomposition import PCA
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
 from sklearn.feature_selection import SelectKBest, chi2, f_classif, mutual_info_classif, RFE
 from sklearn.impute import SimpleImputer
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import FunctionTransformer
 from imblearn.over_sampling import SMOTE
 from imblearn.under_sampling import RandomUnderSampler
+from imblearn.pipeline import Pipeline as ImbPipeline
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -60,32 +63,37 @@ class AdvancedDataMiningExperiment:
         
         datasets_config = {
             'Wine': {
-                'path': 'datasets/winequality-red.csv',
+                'path': 'datasets/winequality-red.csv', #Đức Anh
                 'encoding': 'utf-8',
                 'type': 'numeric'
             },
             'Diabetes': {
-                'path': 'datasets/diabetes.csv',
+                'path': 'datasets/diabetes.csv', #Huyền
                 'encoding': 'utf-8',
                 'type': 'numeric'
             },
+            'HeartDisease': {
+                'path': 'datasets/heart_disease_uci.csv', #Đức Anh
+                'encoding': 'utf-8',
+                'type': 'mixed'
+            },
             'Adult': {
-                'path': 'datasets/adult.csv',
+                'path': 'datasets/adult.csv', #Hà
                 'encoding': 'utf-8',
                 'type': 'mixed'
             },
             'Mushroom': {
-                'path': 'datasets/mushrooms.csv',
+                'path': 'datasets/mushrooms.csv', #Trọng
                 'encoding': 'utf-8',
                 'type': 'categorical'
             },
             'Sonar': {
-                'path': 'datasets/sonar-all-data.csv',
+                'path': 'datasets/sonar-all-data.csv', #Trọng
                 'encoding': 'utf-8',
                 'type': 'numeric'
             },
             'CreditCard': {
-                'path': 'datasets/creditcard.csv',
+                'path': 'datasets/creditcard.csv', #Hà
                 'encoding': 'utf-8',
                 'type': 'numeric'
             }
@@ -200,6 +208,7 @@ class AdvancedDataMiningExperiment:
         target_map = {
             'Wine': 'quality',
             'Diabetes': 'Outcome',
+            'HeartDisease': 'num',
             'Adult': 'income',
             'Mushroom': 'class',
             'Sonar': 'Label',
@@ -208,12 +217,23 @@ class AdvancedDataMiningExperiment:
         return target_map.get(dataset_name)
     
     def preprocess_data(self):
-        """Bước 3: Tiền xử lý dữ liệu với nhiều kỹ thuật nâng cao"""
+        """
+        Bước 3: Tiền xử lý dữ liệu với Pipeline (BEST PRACTICE)
+        
+        Quy trình ĐÚNG:
+        1. Split train/test TRƯỚC
+        2. Fit preprocessing pipeline trên train
+        3. Transform cả train và test
+        4. SMOTE/Undersample CHỈ áp dụng trên train
+        
+        Tránh DATA LEAKAGE!
+        """
         print("\n" + "="*80)
-        print("BƯỚC 3: TIỀN XỬ LÝ DỮ LIỆU (NÂNG CAO)")
+        print("BƯỚC 3: TIỀN XỬ LÝ DỮ LIỆU (BEST PRACTICE - NO DATA LEAKAGE)")
         print("="*80)
         
         self.processed_datasets = {}
+        self.pipelines = {}
         
         for name, dataset_info in self.datasets.items():
             print(f"\n{'='*60}")
@@ -222,258 +242,237 @@ class AdvancedDataMiningExperiment:
             
             df = dataset_info['data'].copy()
             
+            # Bước 1: Lấy X, y THÔ (chưa preprocessing)
             if name == 'Wine':
-                X, y = self._preprocess_wine(df)
+                X, y = self._extract_wine(df)
             elif name == 'Diabetes':
-                X, y = self._preprocess_diabetes(df)
+                X, y = self._extract_diabetes(df)
+            elif name == 'HeartDisease':
+                X, y = self._extract_heartdisease(df)
             elif name == 'Adult':
-                X, y = self._preprocess_adult(df)
+                X, y = self._extract_adult(df)
             elif name == 'Mushroom':
-                X, y = self._preprocess_mushroom(df)
+                X, y = self._extract_mushroom(df)
             elif name == 'Sonar':
-                X, y = self._preprocess_sonar(df)
+                X, y = self._extract_sonar(df)
             elif name == 'CreditCard':
-                X, y = self._preprocess_creditcard(df)
+                X, y = self._extract_creditcard(df)
             else:
                 continue
             
-            # Split data
+            # Bước 2: SPLIT TRƯỚC KHI PREPROCESSING
+            print(f"   📊 Original shape: {X.shape}")
             X_train, X_test, y_train, y_test = train_test_split(
                 X, y, test_size=0.2, random_state=42, stratify=y
             )
+            print(f"   ✂️ Split: Train={X_train.shape}, Test={X_test.shape}")
+            
+            # Bước 3: BUILD PIPELINE cho từng dataset
+            pipeline = self._build_pipeline(name)
+            self.pipelines[name] = pipeline
+            
+            # Bước 4: FIT pipeline trên TRAIN, transform cả train và test
+            print(f"   🔧 Fitting pipeline on TRAIN set...")
+            X_train_transformed = pipeline.fit_transform(X_train, y_train)
+            
+            print(f"   🔄 Transforming TEST set...")
+            X_test_transformed = pipeline.transform(X_test)
+            
+            # Bước 5: Apply SMOTE/Undersample CHỈ trên TRAIN (sau preprocessing)
+            y_train_transformed = y_train
+            
+            if name == 'Diabetes':
+                print(f"   ⚖️ Applying SMOTE on TRAIN set...")
+                smote = SMOTE(random_state=42)
+                X_train_transformed, y_train_transformed = smote.fit_resample(X_train_transformed, y_train)
+                print(f"      Before: {len(y_train)} samples → After: {len(y_train_transformed)} samples")
+            
+            elif name == 'CreditCard':
+                print(f"   ⚖️ Applying Undersampling on TRAIN set...")
+                rus = RandomUnderSampler(sampling_strategy=0.5, random_state=42)
+                X_train_transformed, y_train_transformed = rus.fit_resample(X_train_transformed, y_train)
+                print(f"      Before: {len(y_train)} samples → After: {len(y_train_transformed)} samples")
+            
+            # y_test KHÔNG bao giờ resample!
             
             self.processed_datasets[name] = {
-                'X_train': X_train,
-                'X_test': X_test,
-                'y_train': y_train,
+                'X_train': X_train_transformed,
+                'X_test': X_test_transformed,
+                'y_train': y_train_transformed,
                 'y_test': y_test,
-                'feature_count': X.shape[1]
+                'feature_count': X_train_transformed.shape[1]
             }
             
-            print(f"✅ Train: {X_train.shape}, Test: {X_test.shape}")
+            print(f"   ✅ Final - Train: {X_train_transformed.shape}, Test: {X_test_transformed.shape}")
     
-    def _preprocess_wine(self, df):
-        """
-        Tiền xử lý Wine dataset
+    def _build_pipeline(self, dataset_name):
+        """Build appropriate preprocessing pipeline for each dataset"""
+        pipeline_map = {
+            'Wine': self._build_pipeline_wine,
+            'Diabetes': self._build_pipeline_diabetes,
+            'HeartDisease': self._build_pipeline_heartdisease,
+            'Adult': self._build_pipeline_adult,
+            'Mushroom': self._build_pipeline_mushroom,
+            'Sonar': self._build_pipeline_sonar,
+            'CreditCard': self._build_pipeline_creditcard
+        }
         
-        Kỹ thuật áp dụng:
-        1. Binary classification: Chuyển quality thành 2 lớp (good/bad)
-        2. Feature Engineering: Tạo features tương tác
-        3. RobustScaler: Scaling chống outliers
-        """
-        print("🍷 Wine: Scaling + Feature Engineering")
-        
-        # Bước 1: Chuyển sang binary classification
-        # quality >= 6: good wine (1), quality < 6: bad wine (0)
+        if dataset_name in pipeline_map:
+            return pipeline_map[dataset_name]()
+        else:
+            # Default pipeline
+            return Pipeline([('scaler', StandardScaler())])
+    
+    def _extract_wine(self, df):
+        """Extract raw X, y for Wine dataset (NO preprocessing yet)"""
+        print("🍷 Wine: Extracting features")
         y = (df['quality'] >= 6).astype(int)
         X = df.drop('quality', axis=1)
         
-        # Bước 2: Feature Engineering - Tạo features mới từ sự tương tác
-        # alcohol * sulphates: Tương tác giữa độ cồn và sulphates
+        # Feature Engineering (BEFORE split - domain knowledge)
         X['alcohol_sulphates'] = X['alcohol'] * X['sulphates']
-        
-        # volatile acidity / fixed acidity: Tỷ lệ acid dễ bay hơi
-        # +0.001 để tránh chia cho 0
         X['volatile_total_acidity'] = X['volatile acidity'] / (X['fixed acidity'] + 0.001)
         
-        # Bước 3: RobustScaler - Scaling dựa trên median và IQR
-        # Ưu điểm: Ít bị ảnh hưởng bởi outliers hơn StandardScaler
-        # Công thức: X_scaled = (X - median) / IQR
-        scaler = RobustScaler()
-        X = scaler.fit_transform(X)
-        
-        print(f"   Features: {X.shape[1]}")
-        return X, y
+        return X.values, y.values
     
-    def _preprocess_diabetes(self, df):
-        """
-        Tiền xử lý Diabetes dataset
+    def _build_pipeline_wine(self):
+        """Build preprocessing pipeline for Wine dataset"""
+        return Pipeline([
+            ('scaler', RobustScaler())
+        ])
+    
+    def _extract_diabetes(self, df):
+        """Extract raw X, y for Diabetes dataset"""
+        print("💉 Diabetes: Extracting features")
+        y = df['Outcome'].values
+        X = df.drop('Outcome', axis=1).copy()
         
-        Kỹ thuật áp dụng:
-        1. Smart Imputation: Xử lý giá trị 0 không hợp lý (medical impossibility)
-        2. StandardScaler: Chuẩn hóa dữ liệu
-        3. SMOTE: Xử lý imbalanced data (tăng minority class)
-        """
-        print("💉 Diabetes: Imputation + Scaling + SMOTE")
-        
-        y = df['Outcome']  # Target: 1=có tiểu đường, 0=không
-        X = df.drop('Outcome', axis=1)
-        
-        # Bước 1: Xử lý giá trị 0 không hợp lý về mặt y học
-        # VD: Glucose=0, BloodPressure=0, BMI=0 là không thể
-        # → Thay bằng NaN để impute sau
+        # Replace medical impossibilities (0 values) with NaN
         zero_cols = ['Glucose', 'BloodPressure', 'SkinThickness', 'Insulin', 'BMI']
         for col in zero_cols:
             if col in X.columns:
-                X[col] = X[col].replace(0, np.nan)  # 0 → NaN
+                X[col] = X[col].replace(0, np.nan)
         
-        # Bước 2: Imputation - Điền giá trị thiếu bằng median
-        # Dùng median thay vì mean vì ít bị ảnh hưởng bởi outliers
-        imputer = SimpleImputer(strategy='median')
-        X = imputer.fit_transform(X)
-        
-        # Bước 3: StandardScaler - Chuẩn hóa về mean=0, std=1
-        # Công thức: X_scaled = (X - mean) / std
-        scaler = StandardScaler()
-        X = scaler.fit_transform(X)
-        
-        # Bước 4: SMOTE (Synthetic Minority Over-sampling Technique)
-        # Xử lý imbalanced data bằng cách tạo synthetic samples cho minority class
-        # Cách hoạt động:
-        # 1. Chọn 1 sample từ minority class
-        # 2. Tìm k-nearest neighbors
-        # 3. Tạo sample mới giữa sample gốc và neighbor
-        smote = SMOTE(random_state=42)
-        X, y = smote.fit_resample(X, y)
-        
-        print(f"   Features: {X.shape[1]}, Samples sau SMOTE: {X.shape[0]}")
-        return X, y
+        return X.values, y
     
-    def _preprocess_adult(self, df):
-        """Tiền xử lý Adult dataset"""
-        print("👤 Adult: Mixed data handling + Encoding")
+    def _build_pipeline_diabetes(self):
+        """Build preprocessing pipeline for Diabetes dataset"""
+        # SMOTE sẽ được apply riêng sau khi transform
+        return Pipeline([
+            ('imputer', SimpleImputer(strategy='median')),
+            ('scaler', StandardScaler())
+        ])
+    
+    def _extract_heartdisease(self, df):
+        """Extract raw X, y for Heart Disease dataset"""
+        print("❤️ HeartDisease: Extracting features")
         
-        # Clean column names
+        # Binary classification: num > 0 = heart disease (1), num = 0 = no disease (0)
+        y = (df['num'] > 0).astype(int).values
+        X = df.drop(['num', 'id'], axis=1, errors='ignore').copy()
+        
+        # Handle categorical columns
+        categorical_cols = X.select_dtypes(include=['object']).columns.tolist()
+        for col in categorical_cols:
+            X[col] = X[col].fillna(X[col].mode()[0] if not X[col].mode().empty else 'missing')
+            X[col] = LabelEncoder().fit_transform(X[col].astype(str))
+        
+        # Handle numeric columns
+        numeric_cols = X.select_dtypes(include=[np.number]).columns.tolist()
+        if len(numeric_cols) > 0:
+            imputer = SimpleImputer(strategy='median')
+            X[numeric_cols] = imputer.fit_transform(X[numeric_cols])
+        
+        return X.values, y
+    
+    def _build_pipeline_heartdisease(self):
+        """Build preprocessing pipeline for Heart Disease dataset"""
+        return Pipeline([
+            ('scaler', StandardScaler())
+        ])
+    
+    def _extract_adult(self, df):
+        """Extract raw X, y for Adult dataset"""
+        print("👤 Adult: Extracting features")
         df.columns = df.columns.str.strip()
         
-        # Target
         y = LabelEncoder().fit_transform(df['income'])
+        X = df.drop(['income'], axis=1).copy()
         
-        # Drop target and unnecessary columns
-        X = df.drop(['income'], axis=1)
-        
-        # Handle missing values (marked as '?')
+        # Handle missing values
         X = X.replace('?', np.nan)
         
         # Separate numeric and categorical
-        numeric_cols = X.select_dtypes(include=[np.number]).columns
-        categorical_cols = X.select_dtypes(include=['object']).columns
+        numeric_cols = X.select_dtypes(include=[np.number]).columns.tolist()
+        categorical_cols = X.select_dtypes(include=['object']).columns.tolist()
+        
+        # Impute and encode categorical BEFORE split (necessary for proper encoding)
+        for col in categorical_cols:
+            X[col] = X[col].fillna(X[col].mode()[0] if not X[col].mode().empty else 'missing')
+            X[col] = LabelEncoder().fit_transform(X[col].astype(str))
         
         # Impute numeric
         if len(numeric_cols) > 0:
-            X[numeric_cols] = SimpleImputer(strategy='median').fit_transform(X[numeric_cols])
+            imputer = SimpleImputer(strategy='median')
+            X[numeric_cols] = imputer.fit_transform(X[numeric_cols])
         
-        # Impute and encode categorical
-        for col in categorical_cols:
-            X[col] = X[col].fillna(X[col].mode()[0])
-            X[col] = LabelEncoder().fit_transform(X[col].astype(str))
-        
-        # Scale
-        scaler = StandardScaler()
-        X = scaler.fit_transform(X)
-        
-        print(f"   Features: {X.shape[1]}")
-        return X, y
+        return X.values, y
     
-    def _preprocess_mushroom(self, df):
-        """
-        Tiền xử lý Mushroom dataset
-        
-        Kỹ thuật áp dụng:
-        1. Label Encoding: Chuyển categorical → numeric
-        2. Feature Selection: Chọn features quan trọng bằng Mutual Information
-        
-        Lý do: Mushroom dataset có 23 categorical features
-        → Cần encode sang numeric để Random Forest và Naive Bayes xử lý được
-        """
-        print("🍄 Mushroom: Categorical encoding + Feature selection")
-        
-        # Target: 'e'=edible (ăn được), 'p'=poisonous (độc)
-        # LabelEncoder chuyển 'e'→0, 'p'→1
+    def _build_pipeline_adult(self):
+        """Build preprocessing pipeline for Adult dataset"""
+        return Pipeline([
+            ('scaler', StandardScaler())
+        ])
+    
+    def _extract_mushroom(self, df):
+        """Extract raw X, y for Mushroom dataset"""
+        print("🍄 Mushroom: Extracting features")
         y = LabelEncoder().fit_transform(df['class'])
-        X = df.drop('class', axis=1)
+        X = df.drop('class', axis=1).copy()
         
-        # Label Encoding cho tất cả categorical features
-        # VD: cap-shape: 'b'→0, 'c'→1, 'x'→2, 'f'→3, 'k'→4, 's'→5
+        # Label encode all categorical features
         for col in X.columns:
             X[col] = LabelEncoder().fit_transform(X[col].astype(str))
         
-        X = X.values  # Chuyển DataFrame → numpy array
-        
-        # Feature Selection bằng Mutual Information
-        # Mutual Information đo "thông tin chung" giữa feature và target
-        # Chọn top 15 features có MI cao nhất (quan trọng nhất)
-        # Ưu điểm: Không giả định linear relationship như correlation
-        selector = SelectKBest(mutual_info_classif, k=min(15, X.shape[1]))
-        X = selector.fit_transform(X, y)
-        
-        print(f"   Features sau selection: {X.shape[1]}")
-        return X, y
+        return X.values, y
     
-    def _preprocess_sonar(self, df):
-        """
-        Tiền xử lý Sonar dataset
-        
-        Kỹ thuật áp dụng:
-        1. StandardScaler: Chuẩn hóa dữ liệu
-        2. PCA: Giảm chiều từ 60→30 features
-        
-        Lý do: 
-        - Dataset nhỏ (208 samples) + High-dimensional (60 features)
-        - Dễ bị overfitting → Cần giảm chiều
-        """
-        print("📡 Sonar: PCA dimensionality reduction")
-        
-        # Target: 'R'=Rock (đá), 'M'=Mine (mìn)
-        # Cột cuối cùng là Label
+    def _build_pipeline_mushroom(self):
+        """Build preprocessing pipeline for Mushroom dataset"""
+        return Pipeline([
+            ('feature_selection', SelectKBest(mutual_info_classif, k=15))
+        ])
+    
+    def _extract_sonar(self, df):
+        """Extract raw X, y for Sonar dataset"""
+        print("📡 Sonar: Extracting features")
         y = LabelEncoder().fit_transform(df.iloc[:, -1])
-        X = df.iloc[:, :-1].values  # 60 frequency features
-        
-        # Bước 1: StandardScaler - Bắt buộc trước khi PCA
-        # PCA nhạy cảm với scale → cần chuẩn hóa trước
-        scaler = StandardScaler()
-        X = scaler.fit_transform(X)
-        
-        # Bước 2: PCA (Principal Component Analysis)
-        # Giảm từ 60→30 features (giữ lại thông tin quan trọng nhất)
-        # Cách hoạt động:
-        # 1. Tìm các trục (principal components) có variance lớn nhất
-        # 2. Project dữ liệu lên 30 trục đầu tiên
-        # 3. Loại bỏ 30 trục còn lại (ít variance)
-        pca = PCA(n_components=30, random_state=42)
-        X = pca.fit_transform(X)
-        
-        print(f"   Features sau PCA: {X.shape[1]}")
-        # Variance explained: % thông tin được giữ lại sau PCA
-        print(f"   Variance explained: {pca.explained_variance_ratio_.sum():.2%}")
+        X = df.iloc[:, :-1].values
         return X, y
     
-    def _preprocess_creditcard(self, df):
-        """
-        Tiền xử lý Credit Card dataset
+    def _build_pipeline_sonar(self):
+        """Build preprocessing pipeline for Sonar dataset"""
+        return Pipeline([
+            ('scaler', StandardScaler()),
+            ('pca', PCA(n_components=30, random_state=42))
+        ])
+    
+    def _extract_creditcard(self, df):
+        """Extract raw X, y for Credit Card dataset"""
+        print("💳 Credit Card: Extracting features")
+        y = df['Class'].values
+        X = df.drop('Class', axis=1).copy()
         
-        Kỹ thuật áp dụng:
-        1. StandardScaler: Chuẩn hóa Time và Amount
-        2. Random Undersampling: Giảm majority class để cân bằng
-        
-        Lý do:
-        - Dataset quá lớn (284K samples) → Undersampling để training nhanh hơn
-        - Highly imbalanced (fraud rất ít) → Cần cân bằng classes
-        """
-        print("💳 Credit Card: Undersampling (dataset lớn + imbalanced)")
-        
-        y = df['Class']  # Target: 0=normal, 1=fraud (gian lận)
-        X = df.drop('Class', axis=1)
-        
-        # Bước 1: Scale Time và Amount
-        # V1-V28 đã được PCA transform rồi (chuẩn hóa sẵn)
-        # Chỉ cần scale Time và Amount
+        # Scale Time and Amount (V1-V28 already scaled)
         scaler = StandardScaler()
         X[['Time', 'Amount']] = scaler.fit_transform(X[['Time', 'Amount']])
         
-        X = X.values
-        
-        # Bước 2: Random Undersampling
-        # Giảm majority class (normal transactions) xuống
-        # sampling_strategy=0.5: Tỷ lệ fraud/normal = 0.5 (1 fraud : 2 normal)
-        # VD: Có 492 fraud → giữ lại 984 normal (thay vì 284315)
-        # Ưu điểm: Training nhanh hơn, cân bằng classes
-        # Nhược điểm: Mất thông tin từ majority class
-        rus = RandomUnderSampler(sampling_strategy=0.5, random_state=42)
-        X, y = rus.fit_resample(X, y)
-        
-        print(f"   Features: {X.shape[1]}, Samples sau undersampling: {X.shape[0]}")
-        return X, y
+        return X.values, y
+    
+    def _build_pipeline_creditcard(self):
+        """Build preprocessing pipeline for Credit Card dataset"""
+        return Pipeline([
+            ('passthrough', FunctionTransformer())  # Identity transform
+        ])
     
     def apply_dimensionality_reduction(self):
         """Bước 3.5: Áp dụng giảm chiều cho các datasets phù hợp"""
@@ -846,7 +845,8 @@ class AdvancedDataMiningExperiment:
         
         self.explore_data()
         self.preprocess_data()
-        self.apply_dimensionality_reduction()
+        # Skip apply_dimensionality_reduction() - PCA đã có trong pipeline của Sonar
+        # self.apply_dimensionality_reduction()
         self.train_models()
         self.evaluate_models()
         self.visualize_results()
